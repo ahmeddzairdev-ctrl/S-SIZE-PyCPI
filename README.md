@@ -247,6 +247,10 @@ lst .= 2;
 ## Credits
 
 - **S-SIZE language** — designed and implemented in C++ by **supersuehiro**
-- **I.K.E.M.E.N.** engine — supersuehiro, built atop S-SIZE with SDL, OpenGL, Lua, Ogg Vorbis
-- **I.K.E.M.E.N. Plus Ultra wiki** — English documentation by the community
-- **This Python replica** — cross-platform interpreter preserving the S-SIZE language semantics
+>- I.K.E.M.E.N. SSZ Source Code:
+>https://github.com/CableDorado2/Ikemen-Plus-Ultra/tree/srcOnly
+>
+>- I.K.E.M.E.N. SSZ Google Code Archive:
+>https://code.google.com/archive/p/ikemen/
+- **I.K.E.M.E.N. PLUS ULTRA** engine — Updated branch of the classic S-SIZE IKEMEN. (An Open Source 2D Fighting Game Engine that contains New Features and improvements for MUGEN resources).
+- **I.K.E.M.E.N. Plus Ultra wiki** — English documentation by CableDorado2
