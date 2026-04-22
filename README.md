@@ -59,6 +59,13 @@ The `alpha/lua.py` module is particularly interesting — it wraps `lupa` (or si
 - No third-party packages required
 - `tkinter` is optional (used by `alert.ssz` for GUI pop-ups; falls back to console if absent)
 
+# Fix pip first (one-time)
+python3 -m ensurepip --upgrade
+# OR: curl https://bootstrap.pypa.io/get-pip.py | python3
+
+# Install dependencies
+pip3 install lupa pygame Pillow
+
 ---
 
 ## Usage
