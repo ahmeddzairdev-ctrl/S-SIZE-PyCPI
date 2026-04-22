@@ -70,7 +70,7 @@ curl https://bootstrap.pypa.io/get-pip.py | python3
 
 # Install dependencies
 ```bash
-pip3 install lupa pygame Pillow
+pip3 install lupa pygame Pillow numpy
 ```
 ---
 
