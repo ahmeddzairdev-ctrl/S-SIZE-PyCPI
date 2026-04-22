@@ -53,19 +53,183 @@ The `alpha/lua.py` module is particularly interesting — it wraps `lupa` (or si
 
 ---
 
-## What Stands Out / Potential Issues
+## Requirements
 
-A few things worth noting if you're looking to improve it:
+- **Python 3.10+** (uses `match` patterns in stdlib stubs — actually 3.8+ suffices for the core)
+- No third-party packages required
+- `tkinter` is optional (used by `alert.ssz` for GUI pop-ups; falls back to console if absent)
 
-1. **`ExprStmt` silently swallows all exceptions** — the `try/except Exception: pass` in `exec()` is intentionally lenient, but it can hide real interpreter bugs during development. You might want a debug flag to surface these.
+---
 
-2. **`Environment.set()` auto-defines on miss** — if a variable is used before declaration, it silently creates it in the current scope rather than raising. This may or may not match the C++ engine's behavior exactly.
+## Usage
 
-3. **`_do_binary` doesn't short-circuit `||`** — `&&` properly short-circuits, but `||` evaluates both sides before calling `bool(L) or bool(R)`. This matters if one side has side effects or crashes.
+```bash
+# Run a script (defaults to main.ssz if no argument given)
+python3 ssz.py helloworld.ssz
 
-4. **The `$` operator** (`right-associative expression`) is implemented as simply returning `R`, which seems like a placeholder — worth double-checking the original semantics.
+# Dump the token stream
+python3 ssz.py --tokens helloworld.ssz
 
-5. **`tests.py`** is 792 lines with 80 tests — a solid regression suite. Running it would be a good first check: `python tests.py -v`.
+# Dump the AST
+python3 ssz.py --ast helloworld.ssz
+
+# Add extra library search directories
+python3 ssz.py --lib ./mylibs myscript.ssz
+
+# Run the test suite
+python3 tests.py -v
+
+# Run the engine
+python3 ikemen.py // or python3 ikemen.py main.ssz
+
+# help command
+python3 ikemen.py --help
+python3 ssz.py --help
+```
+
+---
+
+## Writing SSZ Scripts
+
+### Hello, World
+
+```ssz
+lib al = <alert.ssz>;
+al.alert!self?("Hello, world!");
+```
+
+### Variables and types
+
+```ssz
+int a = 42;
+double pi = 3.14159;
+bool flag = true;
+char c = (char)65;          // 'A'
+long big = 9223372036854;
+```
+
+### Functions
+
+```ssz
+int add(int a, int b) {
+    ret a + b;
+}
+
+// Alternate syntax
+..square(int x) int {
+    ret x * x;
+}
+
+// Signature-type syntax
+$int(int, int) multiply(a, b) {
+    ret a * b;
+}
+```
+
+### Control structures
+
+```ssz
+// if  (no else — use branch for if/else)
+if(a < b) a = b;
+
+// loop with do: continue: while:
+int sum = 0;
+int i = 1;
+loop {
+do:
+    sum += i;
+    i++;
+while i <= 10:
+}
+
+// switch with fallthrough  :<-
+switch(val) {
+case 1:  result = 1; break;
+case 2:  result = 2; break;
+default: result = 0; break;
+}
+
+// branch (if/else equivalent)
+branch {
+cond a < b:
+    a = b;
+else:
+    break;
+comm:
+    // runs if not broken
+}
+```
+
+### Classes
+
+```ssz
+&Vec2 {
+    double x;
+    double y;
+    new(double px, double py) { x = px; y = py; }
+    public double length() { ret (x*x + y*y) ** 0.5; }
+}
+
+Vec2 v;
+```
+
+### Enums
+
+```ssz
+|Direction { north, south, east, west }
+// Access: Direction.north
+```
+
+### Libraries
+
+```ssz
+lib al = <alert.ssz>;
+lib s  = <string.ssz>;
+libs   = <math.ssz>;     // merge into current namespace
+
+al.alert!self?(s.iToS(42));
+double r = sqrt(2.0);
+```
+
+### Function pointers & anonymous functions
+
+```ssz
+// Global function pointer
+func $int(int) fp = myFunc;
+int result = fp(:5:);
+
+// Anonymous function
+void demo() {
+    int sum = [int(int a, int b){ ret a + b; }](:3, 4:);
+}
+
+// Anonymous function pointer
+~$int(int, int) add = [int(int a, int b){ ret a + b; }];
+int r = add(:10, 20:);
+```
+
+### Reference types
+
+```ssz
+^int arr.new(10);       // array of 10 ints
+%int lst;               // appendable list
+lst .= 1;               // append
+lst .= 2;
+```
+
+---
+
+## Standard Library Stubs
+
+| Library | Functions |
+|---|---|
+| `alert.ssz` | `alert(msg)`, `alertConsole(msg)` |
+| `string.ssz` | `iToS`, `fToS`, `sToI`, `sToF`, `strLen`, `strCat`, `subStr`, `strFind`, `strUpper`, `strLower`, `strReplace`, `boolToS` |
+| `math.ssz` | `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sqrt`, `pow`, `exp`, `log`, `log10`, `floor`, `ceil`, `round`, `abs`, `min`, `max`, `pi`, `e` |
+| `io.ssz` | `readLine`, `write`, `writeln`, `readFile`, `writeFile`, `appendFile`, `fileExists`, `deleteFile` |
+| `sys.ssz` | `exit`, `getArgs`, `getEnv`, `getCwd`, `sleep`, `timeMs`, `platform`, `pythonVer`, `sszVer` |
+
+---
 
 ## Credits
 
