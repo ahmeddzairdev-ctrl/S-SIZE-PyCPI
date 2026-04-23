@@ -37,6 +37,9 @@ class _SDLEngine:
         self._key_state={}; self._last_char=""; self._quit=False
 
     def init(self,title,w,h,opengl=False,audio=True):
+        # Guard: if already initialised (pre-init from ikemen.py), skip
+        if self.window is not None:
+            return True
         self.title=str(title) if title else "IKEMEN"
         self.width=int(w) if w else 960; self.height=int(h) if h else 720
         engine_root=os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -44,31 +47,28 @@ class _SDLEngine:
         try:
             from engine.window import Window
             self.window=Window.create(self.width,self.height,self.title)
-            # window.py prints its own "[sdl] Window opened" per backend
         except Exception as e:
-            print(f"[sdl] Window failed: {e}, using headless",file=sys.stderr, flush=True)
+            print(f"[sdl] Window failed: {e}, using headless",file=sys.stderr,flush=True)
             try:
                 from engine.window import HeadlessWindow
                 self.window=HeadlessWindow(self.width,self.height,self.title)
             except Exception as e2:
-                print(f"[sdl] Headless also failed: {e2}",file=sys.stderr, flush=True)
+                print(f"[sdl] Headless also failed: {e2}",file=sys.stderr,flush=True)
                 self.window=None
-        # Pass IKEMEN root to the Lua state so it can find scripts
-        try:
-            # Find the actual IKEMEN root (2 levels up from ssz_interpreter)
-            # The ikemen root is stored as _IKEMEN_ROOT global if set
-            pass  # done via global env
-        except Exception:
-            pass
-        return True  # always return True — lenient mode
+        return True
 
     def end(self,*a):
         self._quit=True
         if self.window: self.window.destroy(); self.window=None
 
     def flip(self):
-        if self.window: self.window.flip(); self._pump()
-        else: time.sleep(1/60)
+        if self.window:
+            self.window.flip()
+            self._pump()
+            if self._quit:
+                raise SystemExit(0)
+        else:
+            time.sleep(1/60)
 
     def _pump(self):
         if not self.window: return
@@ -142,7 +142,7 @@ def register(env,interpreter):
 # ── Rendering calls (wired from engine/renderer.py) ──────────────────────────
 def _register_rendering(env):
     import sys, os
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     sys.path.insert(0, root)
     try:
         from engine.renderer import (

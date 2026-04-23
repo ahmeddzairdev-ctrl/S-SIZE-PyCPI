@@ -65,6 +65,12 @@ class Interpreter:
     def _setup_builtins(self) -> None:
         g = self.global_env
         g.define("print", lambda *a: print(*a))
+        # IKEMEN engine stubs — game scripts call these directly
+        g.define("load",       lambda *a: None)
+        g.define("loadFile",   lambda *a: None)
+        g.define("loadReady",  lambda *a: True)
+        g.define("loadFinish", lambda *a: None)
+        g.define("refresh",    lambda *a: None)
 
     # ── entry point ──────────────────────────────────────────────────────────
 
@@ -119,7 +125,12 @@ class Interpreter:
 
         elif name in ("FuncPtrDecl", "MethodPtrDecl", "AnonFuncPtrDecl"):
             init_val = self.eval(node.init, env) if node.init else None
-            env.define(node.name, init_val)
+            # Don't overwrite a valid builtin/existing callable with None
+            existing = env._vars.get(node.name) or env.global_env._vars.get(node.name)
+            if init_val is not None:
+                env.define(node.name, init_val)
+            elif existing is None:
+                env.define(node.name, None)  # only define None if truly absent
 
         elif name == "ExprStmt":
             try:
@@ -127,8 +138,7 @@ class Interpreter:
             except Exception as _e:
                 if os.environ.get("SSZ_DEBUG"):
                     import sys as _sys
-                    print(f"[ssz:debug] ExprStmt swallowed: {type(_e).__name__}: {_e}  "
-                          f"(line {getattr(node, 'line', '?')})", file=_sys.stderr)
+                    print(f"[ssz:debug] ExprStmt swallowed: {type(_e).__name__}: {_e} (line {getattr(node,'line','?')})", file=_sys.stderr, flush=True)
         elif name == "ReturnStmt":
             raise ReturnSignal(self.eval(node.value, env) if node.value else None)
 
@@ -169,7 +179,7 @@ class Interpreter:
         elif name == "ThreadDecl":
             fn   = env.get(node.func_name)
             args = [self.eval(a, env) for a in node.args]
-            self._call_function(fn, args, env)
+            self._call_function(fn, args, env, _callee_name=node.func_name)
             env.define(node.var_name, None)
 
         else:
@@ -260,7 +270,8 @@ class Interpreter:
         if name == "FuncPtrCall":
             fp   = self.eval(node.fp, env)
             args = [self.eval(a, env) for a in node.args]
-            return self._call_function(fp, args, env)
+            return self._call_function(fp, args, env,
+                                       _callee_name=self._callee_debug_name(node.fp))
 
         if name == "AnonFuncLiteral":
             return SSZAnonFunc(
@@ -321,7 +332,10 @@ class Interpreter:
 
     def _get_field(self, obj: Any, field: str, env: Environment) -> Any:
         if isinstance(obj, SSZModule):
-            return obj.get(field)
+            v = obj.get(field)
+            if v is None:
+                v = env.global_env._vars.get(field)
+            return v
         if isinstance(obj, SSZObject):
             return obj.fields.get(field)
         if isinstance(obj, dict):
@@ -358,7 +372,8 @@ class Interpreter:
             fn = self._resolve_callee(fn_node.callee, env)
             if callable(fn) and not isinstance(fn, (SSZFunction, SSZAnonFunc)):
                 return fn(*args)
-            return self._call_function(fn, args, env)
+            return self._call_function(fn, args, env,
+                                       _callee_name=self._callee_debug_name(fn_node.callee))
 
         if isinstance(fn_node, MemberAccess):
             obj = self.eval(fn_node.obj, env) if fn_node.obj else self._get_self(env)
@@ -367,13 +382,36 @@ class Interpreter:
 
         # Fallback: treat as regular call with one arg
         fn = self.eval(fn_node, env)
-        return self._call_function(fn, [arg_val], env)
+        return self._call_function(fn, [arg_val], env,
+                                   _callee_name=self._callee_debug_name(fn_node))
 
     def _resolve_callee(self, callee: Node, env: Environment) -> Any:
         if isinstance(callee, MemberAccess):
             obj = self.eval(callee.obj, env) if callee.obj else self._get_self(env)
             return self._get_field(obj, callee.field, env)
         return self.eval(callee, env)
+
+    def _callee_debug_name(self, node: Node) -> str:
+        """Extract a human-readable name from any callee AST node for debug messages."""
+        if isinstance(node, Identifier):
+            return node.name
+        if isinstance(node, (MemberAccess, DirectFieldAccess)):
+            prefix = self._callee_debug_name(node.obj) if getattr(node, "obj", None) else "self"
+            return f"{prefix}.{node.field}"
+        if isinstance(node, ScopeAccess):
+            prefix = self._callee_debug_name(node.scope) if hasattr(node, "scope") else "?"
+            return f"{prefix}::{node.member}"
+        if isinstance(node, DotExpr):
+            return f".{node.name}"
+        if isinstance(node, (FuncPtrCall,)):
+            return f"(:{self._callee_debug_name(node.fp)}:)"
+        if isinstance(node, IndexAccess):
+            return f"{self._callee_debug_name(node.obj)}[...]"
+        if hasattr(node, "name") and node.name:
+            return str(node.name)
+        if hasattr(node, "field") and node.field:
+            return str(node.field)
+        return type(node).__name__
 
     # ── index access ─────────────────────────────────────────────────────────
 
@@ -558,12 +596,16 @@ class Interpreter:
                 method = obj.get(ma.field)
             return self._call_method(method, obj, args, env)
         fn = self.eval(node.callee, env)
-        return self._call_function(fn, args, env)
+        _n = self._callee_debug_name(node.callee)
+        return self._call_function(fn, args, env, _callee_name=_n)
 
     def _call_method(self, method: Any, obj: Any, args: List[Any], env: Environment) -> Any:
         if callable(method) and not isinstance(method, (SSZFunction, SSZAnonFunc)):
             return method(*args)
         if isinstance(method, (SSZFunction, SSZAnonFunc)):
+            if os.environ.get("SSZ_DEBUG"):
+                import sys as _sys
+                print(f"[ssz:trace] >> method {getattr(method,'name','?')} on {type(obj).__name__}", file=_sys.stderr, flush=True)
             call_env = method.env.child()
             call_env.define("self", obj)
             for param, arg in zip(method.params, args):
@@ -573,24 +615,50 @@ class Interpreter:
             return self._exec_body(method.body, call_env)
         return None
 
-    def _call_function(self, fn: Any, args: List[Any], env: Environment) -> Any:
-        if fn is None: return None  # IgnoreMostErrors: unresolved call → None
+    def _call_function(self, fn: Any, args: List[Any], env: Environment,
+                       _callee_name: str = "?") -> Any:
+        if fn is None:
+            if os.environ.get("SSZ_DEBUG"):
+                import sys as _sys
+                w = getattr(self, "_warned_none", None)
+                if w is None: self._warned_none = w = set()
+                if _callee_name not in w:
+                    w.add(_callee_name)
+                    print(f"[ssz:debug] unresolved: '{_callee_name}'", file=_sys.stderr, flush=True)
+            return None
         if callable(fn) and not isinstance(fn, (SSZFunction, SSZAnonFunc)):
             return fn(*args)
         if isinstance(fn, (SSZFunction, SSZAnonFunc)):
+            if os.environ.get("SSZ_DEBUG"):
+                import sys as _sys
+                print(f"[ssz:trace] >> call {getattr(fn,'name','<anon>')}", file=_sys.stderr, flush=True)
             call_env = fn.env.child()
             for param, arg in zip(fn.params, args):
                 call_env.define(param.name, arg)
             if isinstance(fn, SSZAnonFunc):
                 for k, v in fn.capture.items(): call_env.define(k, v)
             return self._exec_body(fn.body, call_env)
-        return None  # IgnoreMostErrors: non-callable → None
+        return None
 
     def _exec_body(self, body: List[Node], env: Environment) -> Any:
+        _debug = os.environ.get("SSZ_DEBUG")
         try:
-            for stmt in body: self.exec(stmt, env)
+            for stmt in body:
+                if _debug:
+                    import sys as _sys
+                    print(f"[ssz:trace]   {type(stmt).__name__} L{getattr(stmt,'line','?')}",
+                          file=_sys.stderr, flush=True)
+                self.exec(stmt, env)
         except ReturnSignal as rs:
             return rs.value
+        except (BreakSignal, ContinueSignal, MultiBreak):
+            raise
+        except Exception as e:
+            if _debug:
+                import sys as _sys, traceback as _tb
+                print(f"[ssz:trace]   !! CRASH: {type(e).__name__}: {e}", file=_sys.stderr, flush=True)
+                _tb.print_exc(file=_sys.stderr)
+            raise
         return None
 
     # ── variable declaration ─────────────────────────────────────────────────
@@ -610,13 +678,20 @@ class Interpreter:
             env.define(nm, val)
 
             if init_expr is not None:
-                computed = self.eval(init_expr, env)
-                if isinstance(computed, bool): pass
+                try:
+                    computed = self.eval(init_expr, env)
+                except Exception:
+                    computed = None  # keep the default zero-value on init crash
+                if computed is None:
+                    pass  # keep pre-allocated default
+                elif isinstance(computed, bool):
+                    env.set(nm, computed)
                 elif type_name in INT_TYPES and isinstance(computed, float):
-                    computed = int(computed)
+                    env.set(nm, int(computed))
                 elif type_name in FLOAT_TYPES and isinstance(computed, int):
-                    computed = float(computed)
-                env.set(nm, computed)
+                    env.set(nm, float(computed))
+                else:
+                    env.set(nm, computed)
 
             if node.is_const:
                 self.consts[nm] = env.get(nm)
@@ -684,12 +759,15 @@ class Interpreter:
     def _do_lib_import(self, node: LibImport, env: Environment) -> None:
         mod = self._load_library(node.path, node.system)
         env.define(node.alias, mod)
+        # Mirror into global so .alias dot-access works from any context
+        env.global_env._vars[node.alias] = mod
 
     def _do_libs_import(self, node: LibsImport, env: Environment) -> None:
         mod = self._load_library(node.path, node.system)
         if isinstance(mod, SSZModule):
             for k, v in mod.env._vars.items():
                 env.define(k, v)
+                env.global_env._vars.setdefault(k, v)
 
     def _load_library(self, path: str, system: bool = False) -> Any:
         # Normalise separators
@@ -802,8 +880,14 @@ class Interpreter:
     # ── .new() expression ────────────────────────────────────────────────────
 
     def _do_new_expr(self, node: NewExpr, env: Environment) -> Any:
-        obj  = self.eval(node.obj, env)
-        size = int(self.eval(node.size, env))
+        obj      = self.eval(node.obj, env)
+        size_val = self.eval(node.size, env)
+        if size_val is None:
+            if os.environ.get("SSZ_DEBUG"):
+                import sys as _sys
+                print(f"[ssz:debug] .new() size=None L{getattr(node,'line','?')} obj={obj!r}", file=_sys.stderr, flush=True)
+            size_val = 0
+        size = int(size_val)
         if isinstance(obj, (SSZArray, SSZList)):
             if node.bracket:
                 if size < 0:

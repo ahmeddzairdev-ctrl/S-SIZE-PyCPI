@@ -135,24 +135,40 @@ class Window:
 class PygameWindow(Window):
     def __init__(self, width: int, height: int, title: str):
         super().__init__(width, height, title)
-        import pygame, platform, os
+        import pygame, os, platform
         os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
-        pygame.init()
+
+        if not pygame.get_init():
+            pygame.init()
+
         pygame.display.set_caption(title)
-        # RESIZABLE helps macOS register the window with the OS compositor
-        flags = pygame.RESIZABLE if platform.system() == "Darwin" else 0
-        self._screen = pygame.display.set_mode((width, height), flags)
-        # Force window to front on macOS
+        flags = 0
         if platform.system() == "Darwin":
-            try:
-                import AppKit  # type: ignore
-                AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
-            except Exception:
-                pass
-        # Initial black flip so the window registers with the OS immediately
+            # SHOWN flag ensures macOS compositor registers the window
+            flags = pygame.SHOWN if hasattr(pygame, "SHOWN") else 0
+        self._screen = pygame.display.set_mode((width, height), flags)
+        self._pygame = pygame
+
+        # Pump events several times so macOS registers + shows the window
+        for _ in range(5):
+            pygame.event.pump()
+        # Initial black frame
         self._screen.fill((0, 0, 0))
         pygame.display.flip()
-        self._pygame = pygame
+        pygame.event.pump()
+
+        # Bring window to front on macOS via AppleScript (most reliable method)
+        if platform.system() == "Darwin":
+            try:
+                import subprocess, sys as _sys
+                app_name = "Python"  # python3 processes show as "Python" in macOS
+                subprocess.Popen(
+                    ["osascript", "-e",
+                     f'tell application "{app_name}" to activate'],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+
         self._key_map = self._build_key_map(pygame)
         print(f"[sdl] Window opened: {width}x{height} (PygameWindow)",
               file=sys.stderr, flush=True)
@@ -172,9 +188,10 @@ class PygameWindow(Window):
 
     def _present(self) -> None:
         pg = self._pygame
+        # Pump OS events every frame (required on macOS to keep window alive)
+        pg.event.pump()
         data = self.frame.tobytes()
         size = (self.width, self.height)
-        # pygame 2.1.3+ prefers frombuffer (zero-copy); fall back for older builds
         try:
             surf = pg.image.frombuffer(data, size, "RGBA")
         except AttributeError:

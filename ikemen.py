@@ -183,43 +183,42 @@ def run(root_hint: str = ".", headless: bool = False) -> int:
     # Expose the IKEMEN root path to scripts that need it
     interp.global_env.define("_IKEMEN_ROOT", str(root))
 
-    # ── Execute ─────────────────────────────────────────────────────────────
-    debug = bool(os.environ.get("SSZ_DEBUG") or headless)
+    # ── Pre-init SDL window ──────────────────────────────────────────────────
+    # In the real IKEMEN binary, SDL is initialised by the C++ engine BEFORE
+    # any SSZ scripts run. The SSZ scripts therefore never call sdl.init().
+    # We must open the window here so that sdl.flip() / sdl.event() work when
+    # the game loop starts inside ikemen.ssz.
+    if not headless:
+        try:
+            here = Path(__file__).resolve().parent
+            if str(here) not in sys.path:
+                sys.path.insert(0, str(here))
+            from ssize.stdlib.alpha.sdlplugin import _e as _sdl_engine
+            # Try to read dimensions from save/config.ssz — fall back to 960×720
+            _w, _h = 960, 720
+            _title = "I.K.E.M.E.N Plus Ultra"
+            try:
+                import re as _re
+                cfg_path = root / "save" / "config.ssz"
+                if cfg_path.exists():
+                    cfg_src = cfg_path.read_text(encoding="utf-8-sig", errors="replace")
+                    for _line in cfg_src.splitlines():
+                        _m = _re.search(r'GameWidth\s*=\s*(\d+)', _line)
+                        if _m: _w = int(_m.group(1))
+                        _m = _re.search(r'GameHeight\s*=\s*(\d+)', _line)
+                        if _m: _h = int(_m.group(1))
+            except Exception:
+                pass
+            _sdl_engine.init(_title, _w, _h)
+            print(f"[ikemen] Pre-init SDL: {_w}x{_h}", file=sys.stderr, flush=True)
+        except Exception as _e:
+            print(f"[ikemen] SDL pre-init failed: {_e}", file=sys.stderr, flush=True)
 
+    # ── Execute ─────────────────────────────────────────────────────────────
     try:
         print("[ikemen] Starting engine...", file=sys.stderr)
         interp.run(program)
-
-        # ── Post-run diagnostics ─────────────────────────────────────────
-        g = interp.global_env._vars
-        top_names = [k for k in g if k not in ("print",)]
-        print(f"[ikemen] Top-level names defined: {top_names}", file=sys.stderr)
-
-        # Check that the SDL module actually initialised a window
-        sdl_mod = None
-        for name, val in g.items():
-            from ssize.runtime import SSZModule
-            if isinstance(val, SSZModule):
-                # look for the one that has 'init' or '_engine'
-                if "_engine" in val.env._vars or "init" in val.env._vars:
-                    sdl_mod = (name, val)
-                    break
-
-        if sdl_mod is None:
-            print("[ikemen] WARNING: No SDL module found in globals — "
-                  "check that ssz/ikemen.ssz imports sdlplugin "
-                  "(look for  lib x = <alpha/sdlplugin.ssz>;  at the top of the file).",
-                  file=sys.stderr)
-        else:
-            eng = sdl_mod[1].env._vars.get("_engine")
-            if eng is not None and eng.window is None:
-                print(f"[ikemen] WARNING: SDL module '{sdl_mod[0]}' loaded but "
-                      "window was never opened — sdl.init() was not called, "
-                      "or it was called with a name other than 'init'.",
-                      file=sys.stderr)
-
         print("[ikemen] Engine exited cleanly.", file=sys.stderr)
-
     except KeyboardInterrupt:
         print("\n[ikemen] Interrupted by user.", file=sys.stderr)
     except SSZError as e:
@@ -232,7 +231,7 @@ def run(root_hint: str = ".", headless: bool = False) -> int:
     except Exception as e:
         import traceback
         print(f"[ikemen] Fatal error: {type(e).__name__}: {e}", file=sys.stderr)
-        traceback.print_exc()
+        traceback.print_exc()   # always show full traceback
         return 1
 
     return 0
